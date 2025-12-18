@@ -14,7 +14,11 @@ from sklearn.metrics import (
 )
 
 # ================= CONFIG =================
-st.set_page_config(page_title="Spam Classification System", layout="wide")
+st.set_page_config(
+    page_title="Spam Classification System",
+    layout="wide"
+)
+
 DATA_FILE = "spambase.csv"
 
 # ================= DATA =================
@@ -45,15 +49,17 @@ def prepare_data(df):
 @st.cache_resource
 def train_models(X_train, X_train_nb, y_train):
     nb = MultinomialNB()
-    rf = RandomForestClassifier(n_estimators=200, random_state=42)
+    rf = RandomForestClassifier(
+        n_estimators=200,
+        random_state=42
+    )
 
     nb.fit(X_train_nb, y_train)
     rf.fit(X_train, y_train)
 
     return nb, rf
 
-
-# ================= TXT FEATURE EXTRACTION =================
+# ================= FEATURE EXTRACTION =================
 def extract_spambase_features(text, feature_columns):
     original_text = text
     lower_text = text.lower()
@@ -89,7 +95,6 @@ def extract_spambase_features(text, feature_columns):
 
     return pd.DataFrame([features])
 
-
 # ================= HELPERS =================
 def evaluate(name, y_true, y_pred):
     return {
@@ -116,25 +121,76 @@ def plot_confusion(y_true, y_pred, title):
     st.pyplot(fig)
     plt.close(fig)
 
-
 # ================= SESSION STATE =================
 if "page" not in st.session_state:
-    st.session_state.page = "Training"
+    st.session_state.page = "Simulation"
 
+# ===================================================
+# ================= SIMULATION PAGE =================
+# ===================================================
+if st.session_state.page == "Simulation":
+    st.title("📨 Email Spam Detection Simulation")
 
-# ================= NAVIGATION =================
-c1, c2 = st.columns(2)
-with c1:
-    if st.button("📊 Training & Evaluation"):
+    df = load_dataset()
+    feature_cols = df.drop(columns=["class"]).columns.tolist()
+
+    (
+        X_train, X_test, y_train, y_test,
+        X_train_nb, X_test_nb, scaler
+    ) = prepare_data(df)
+
+    nb, rf = train_models(X_train, X_train_nb, y_train)
+
+    best_model = rf if f1_score(
+        y_test, rf.predict(X_test)
+    ) >= f1_score(
+        y_test, nb.predict(X_test_nb)
+    ) else nb
+
+    st.info(
+        f"Using model: "
+        f"{'Random Forest (Modern)' if best_model == rf else 'Naive Bayes (Baseline)'}"
+    )
+
+    uploaded = st.file_uploader(
+        "Upload email file (.txt or .csv)",
+        type=["txt", "csv"]
+    )
+
+    if uploaded:
+        if uploaded.name.endswith(".txt"):
+            text = uploaded.read().decode("utf-8", errors="ignore")
+            st.text_area("Email Content", text, height=250)
+
+            email_df = extract_spambase_features(text, feature_cols)
+
+            if best_model == nb:
+                email_df = scaler.transform(email_df)
+
+        else:
+            preview_df = pd.read_csv(uploaded)
+            st.dataframe(preview_df.head())
+            email_df = preview_df[feature_cols]
+
+        prediction = best_model.predict(email_df)[0]
+
+        if prediction == 1:
+            st.error("🚨 SPAM DETECTED — This email is unsafe.")
+        else:
+            st.success("✅ EMAIL IS SAFE — No spam indicators detected.")
+
+    st.divider()
+
+    # 🔽 BUTTON AT THE BOTTOM
+    if st.button("📊 View Training & Calculations"):
         st.session_state.page = "Training"
-with c2:
-    if st.button("📨 Email Simulation"):
-        st.session_state.page = "Simulation"
+        st.rerun()
 
-
-# ================= TRAINING PAGE =================
+# ===================================================
+# ================= TRAINING PAGE ===================
+# ===================================================
 if st.session_state.page == "Training":
-    st.title("Spam Classification: Baseline vs Modern")
+    st.title("📊 Training & Model Evaluation")
 
     df = load_dataset()
     st.subheader("Dataset Preview")
@@ -155,80 +211,28 @@ if st.session_state.page == "Training":
         evaluate("Random Forest", y_test, rf_pred)
     ])
 
-    show_table = st.checkbox("Show performance table", True)
-    show_cm = st.checkbox("Show confusion matrices", True)
-    show_roc = st.checkbox("Show ROC comparison", True)
+    st.subheader("Performance Metrics")
+    st.dataframe(results_df)
 
-    if show_table:
-        st.subheader("Performance Metrics")
-        st.dataframe(results_df)
+    col1, col2 = st.columns(2)
+    with col1:
+        plot_confusion(y_test, nb_pred, "Naive Bayes")
+    with col2:
+        plot_confusion(y_test, rf_pred, "Random Forest")
 
-    if show_cm:
-        col1, col2 = st.columns(2)
-        with col1:
-            plot_confusion(y_test, nb_pred, "Naive Bayes")
-        with col2:
-            plot_confusion(y_test, rf_pred, "Random Forest")
+    fpr_nb, tpr_nb, _ = roc_curve(y_test, nb.predict_proba(X_test_nb)[:, 1])
+    fpr_rf, tpr_rf, _ = roc_curve(y_test, rf.predict_proba(X_test)[:, 1])
 
-    if show_roc:
-        fpr_nb, tpr_nb, _ = roc_curve(y_test, nb.predict_proba(X_test_nb)[:, 1])
-        fpr_rf, tpr_rf, _ = roc_curve(y_test, rf.predict_proba(X_test)[:, 1])
+    fig, ax = plt.subplots()
+    ax.plot(fpr_nb, tpr_nb, label=f"NB AUC={auc(fpr_nb, tpr_nb):.2f}")
+    ax.plot(fpr_rf, tpr_rf, label=f"RF AUC={auc(fpr_rf, tpr_rf):.2f}")
+    ax.plot([0, 1], [0, 1], "--")
+    ax.legend()
+    st.pyplot(fig)
+    plt.close(fig)
 
-        fig, ax = plt.subplots()
-        ax.plot(fpr_nb, tpr_nb, label=f"NB AUC={auc(fpr_nb,tpr_nb):.2f}")
-        ax.plot(fpr_rf, tpr_rf, label=f"RF AUC={auc(fpr_rf,tpr_rf):.2f}")
-        ax.plot([0, 1], [0, 1], "--")
-        ax.legend()
-        st.pyplot(fig)
-        plt.close(fig)
+    st.divider()
 
-
-# ================= SIMULATION PAGE =================
-if st.session_state.page == "Simulation":
-    st.title("Email Spam Detection Simulation")
-
-    df = load_dataset()
-    feature_cols = df.drop(columns=["class"]).columns.tolist()
-
-    (
-        X_train, X_test, y_train, y_test,
-        X_train_nb, X_test_nb, scaler
-    ) = prepare_data(df)
-
-    nb, rf = train_models(X_train, X_train_nb, y_train)
-
-    best_model = rf if f1_score(y_test, rf.predict(X_test)) >= \
-        f1_score(y_test, nb.predict(X_test_nb)) else nb
-
-    st.info(
-        f"Using model: {'Random Forest (Modern)' if best_model == rf else 'Naive Bayes (Baseline)'}"
-    )
-
-    uploaded = st.file_uploader(
-        "Upload email file (.txt for raw email or .csv for feature row)",
-        type=["txt", "csv"]
-    )
-
-    if uploaded:
-        st.subheader("📄 Uploaded File Content")
-
-        if uploaded.name.endswith(".txt"):
-            text = uploaded.read().decode("utf-8", errors="ignore")
-            st.text_area("Email Body", text, height=260)
-
-            email_df = extract_spambase_features(text, feature_cols)
-
-            if best_model == nb:
-                email_df = scaler.transform(email_df)
-
-        else:
-            preview_df = pd.read_csv(uploaded)
-            st.dataframe(preview_df.head())
-            email_df = preview_df[feature_cols]
-
-        prediction = best_model.predict(email_df)[0]
-
-        if prediction == 1:
-            st.error("🚨 SPAM DETECTED — This email is unsafe.")
-        else:
-            st.success("✅ EMAIL IS SAFE — No spam indicators detected.")
+    if st.button("⬅ Back to Simulation"):
+        st.session_state.page = "Simulation"
+        st.rerun()
